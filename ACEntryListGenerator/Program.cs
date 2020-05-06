@@ -318,7 +318,7 @@ namespace ACEntryListGenerator
                 case "BMW E30 grA":
                     return "bmw_m3_e30_gra";
                 case "Peugeot 206 Gti":
-                    return "peugeot_206_rps_206_GTi_Cup";
+                    return "peugeot_206_rps_206_gti_cup";
                 case "Mazda MX5 CUP":
                     return "ks_mazda_mx5_cup";
                 default:
