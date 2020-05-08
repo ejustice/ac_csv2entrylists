@@ -1,4 +1,5 @@
-﻿using ExcelDataReader;
+﻿using ACEntryListGenerator.Models;
+using ExcelDataReader;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -15,51 +16,108 @@ using System.Threading.Tasks;
 
 namespace ACEntryListGenerator
 {
-    class Program
+    partial class Program
     {
-        static string CsvPath; // = @"C:\tmp\DNRT-regs\DNRT - KRPE Race 10 Mei Zolder.csv";
-        static string AssettoCorsaPath; // = @"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\";
-        static string CarsPath = @"content\cars\";
+        static readonly string CsvPath; // = @"C:\tmp\DNRT-regs\DNRT - KRPE Race 10 Mei Zolder.csv";
+        static readonly string AssettoCorsaPath; // = @"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\";
+        const string CarsPath = @"content\cars\";
 
         public static IConfigurationRoot configuration;
 
+        static readonly Registration BroadcastReg;
+        static readonly Registration RaceControlReg;
+        static readonly Dictionary<string, string> WrongIdFixDictionary = new Dictionary<string, string>();
+
+        static Program()
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            // Create service collection
+            LogInfo("Building service provider");
+            ServiceCollection serviceCollection = new ServiceCollection();
+            ConfigureServices(serviceCollection);
+
+            CsvPath = configuration["CsvPath"];
+            LogInfo($"getting csv at {CsvPath}");
+            if (!File.Exists(CsvPath))
+            {
+                LogError($"File not found: {CsvPath}");
+                throw new Exception();
+            }
+
+            AssettoCorsaPath = configuration["AssettoCorsaPath"];
+            LogInfo($"AssettoCorsaPath at {AssettoCorsaPath}");
+
+            if (!Directory.Exists(AssettoCorsaPath))
+            {
+                LogError($"Game directory not found: {AssettoCorsaPath}");
+                throw new Exception();
+            }
+
+            var brodcastId = configuration["BroadcastSteamId"];
+            if (String.IsNullOrEmpty(brodcastId))
+            {
+                BroadcastReg = null;
+            }
+            else
+            {
+                BroadcastReg = new Registration()
+                {
+                    Car = Cars.BMW_E30_GRA,
+                    FullName = "Tv Crew",
+                    Skin = "knutselpacecar",
+                    SteamId64 = brodcastId,
+                    Team = "Tv Crew",
+                };
+            }
+
+            var raceControlSteamId = configuration["RaceControlSteamId"];
+            if (String.IsNullOrEmpty(raceControlSteamId))
+            {
+                RaceControlReg = null;
+            }
+            else
+            {
+                RaceControlReg = new Registration()
+                {
+                    Car = Cars.BMW_E30_GRA,
+                    FullName = "Race Control",
+                    Skin = "knutselpacecar",
+                    SteamId64 = raceControlSteamId,
+                };
+            }
+
+            var wrongIdFix = configuration["WrongIdFixMapping"];
+            if (!string.IsNullOrWhiteSpace(wrongIdFix))
+            {
+                var list = wrongIdFix.Split(";");
+                foreach (var fixItem in list)
+                {
+                    var parts = fixItem.Split("|");
+                    WrongIdFixDictionary.Add(parts[0], parts[1]);
+                }
+            }
+
+
+            var (_, error) = Init(configuration);
+            if (!String.IsNullOrWhiteSpace(error))
+            {
+                LogError(error);
+            }
+        }
+
+        private static (string, string) Init(IConfigurationRoot configuration)
+        {
+
+            return (null, null);
+        }
 
         // Key = "carFolder|skinFolder"
-        static Dictionary<string, SkinUi> Skins = new Dictionary<string, SkinUi>();
         static async Task Main(string[] args)
         {
             try
             {
-                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-                // Create service collection
-                LogInfo("Building service provider");
-                ServiceCollection serviceCollection = new ServiceCollection();
-                ConfigureServices(serviceCollection);
-                var serviceProvider = serviceCollection.BuildServiceProvider();
-                //            var logger = serviceProvider.GetService<ILogger<Program>>();
-
-                CsvPath = configuration["CsvPath"];
-                LogInfo($"getting csv at {CsvPath}");
-                if (!File.Exists(CsvPath))
-                {
-                    LogError($"Fatal: File not found: {CsvPath}");
-                    Console.ReadKey();
-                    return;
-                }
-
-                AssettoCorsaPath = configuration["AssettoCorsaPath"];
-                LogInfo($"AssettoCorsaPath at {AssettoCorsaPath}");
-
-                if (!Directory.Exists(AssettoCorsaPath))
-                {
-                    LogError($"Fatal: game directory not found: {AssettoCorsaPath}");
-                    Console.ReadKey();
-                    return;
-                }
-
                 // laod CSV
                 var registrations = ReadCVS();
-
 
                 var carGroups = registrations.GroupBy(r => r.Car);
 
@@ -95,6 +153,8 @@ namespace ACEntryListGenerator
             }
         }
 
+
+
         private static void LogInfo(string text)
         {
             Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -110,12 +170,12 @@ namespace ACEntryListGenerator
         private static void LogWarning(string text)
         {
             Console.ForegroundColor = ConsoleColor.DarkYellow;
-            Console.WriteLine(text);
+            Console.WriteLine($"[WARNING]: {text}");
         }
         private static void LogError(string text)
         {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine(text);
+            Console.WriteLine($"[ERROR]: {text}");
         }
 
 
@@ -153,19 +213,47 @@ namespace ACEntryListGenerator
                 throw new Exception($"Game directory not found: {AssettoCorsaPath}");
             }
 
-            var carKey = MapCarKey(carGroup.Key);
             LogInfo("");
-            LogInfo($"Generating entrylist for car {carKey}");
-            var skins = LoadSkinsData(carKey);
+            LogInfo($"Generating entrylist for car {carGroup.Key}");
 
-            if (!Directory.Exists(carKey))
+            // Max in Zolder is 30 -RaceControl, -Broadcast
+            int maxCars = GetMaxCars();
+            if (carGroup.Count() > 28)
             {
-                Directory.CreateDirectory(carKey);
+                LogWarning($"Too many cars in group: {carGroup.Count()}/28");
             }
-            using (StreamWriter writer = File.CreateText($"{carKey}\\entry_list.ini"))
+
+            var skins = LoadSkinsData(carGroup.Key);
+
+            if (!Directory.Exists(carGroup.Key))
             {
-                // try to find skin by name
+                Directory.CreateDirectory(carGroup.Key);
+            }
+            using (StreamWriter writer = File.CreateText($"{carGroup.Key}\\entry_list.ini"))
+            {
+                var driversToRegister = new List<Registration>();
                 foreach (var reg in carGroup)
+                {
+                    // Deduplicating
+                    var duplicates = carGroup.Where(r => r.Email == reg.Email).ToList();
+                    if (duplicates.Count > 1)
+                    {
+                        LogWarning($"Driver with email address {reg.Email} appears multiple times.");
+                        if (reg.Added < duplicates.Max(r => r.Added))
+                        {
+                            LogWarning("not the latest instance of this driver, skipping.");
+                            continue;
+                        }
+                        else
+                        {
+                            LogInfo("latest instance of driver, continuing");
+                        }
+                    }
+                    driversToRegister.Add(reg);
+                }
+
+                // try to find skin by name
+                foreach (var reg in driversToRegister)
                 {
                     var skinByDriverName = skins.FirstOrDefault(s => s.Drivername.Equals(reg.FullName, StringComparison.InvariantCultureIgnoreCase));
                     if (skinByDriverName != null)
@@ -178,8 +266,8 @@ namespace ACEntryListGenerator
                     }
                 }
                 // try to find skin by given skin id
-                bool uesOnlyOnce = skins.Count >= carGroup.Count(r => !r.SkinFound);
-                foreach (var reg in carGroup.Where(r => !r.SkinFound && !String.IsNullOrEmpty(r.Skin)))
+                bool uesOnlyOnce = skins.Count >= driversToRegister.Count(r => !r.SkinFound);
+                foreach (var reg in driversToRegister.Where(r => !r.SkinFound && !String.IsNullOrEmpty(r.Skin)))
                 {
                     LogInfo($" - - provided skinName: {reg.Skin}");
                     var skinByName = skins.FirstOrDefault(
@@ -199,7 +287,7 @@ namespace ACEntryListGenerator
                 }
                 // randomizeSkin
                 var random = new Random(DateTime.Now.Millisecond);
-                foreach (var reg in carGroup.Where(r => !r.SkinFound))
+                foreach (var reg in driversToRegister.Where(r => !r.SkinFound))
                 {
                     // {reg.Email} - 
                     LogWarning($"{reg.FullName}: No skin found, randomizing.");
@@ -209,35 +297,24 @@ namespace ACEntryListGenerator
                     reg.SkinFoundMode = "Random";
                 }
 
-                var drivers = carGroup.ToList();
-
-                LogInfo("");
-                LogInfo("Adding TvCrew to list");
-                drivers.Add(new Registration()
+                if (BroadcastReg != null)
                 {
-                    FullName = "Tv Crew",
-                    Skin = "knutselpacecar",
-                    // Jake
-                    SteamId64 = "76561198055060398",
-                    Team = "Tv Crew",
-                });
+                    LogInfo("");
+                    LogInfo("Adding TvCrew to list");
+                    driversToRegister.Add(BroadcastReg);
+                }
 
-
-                LogInfo("");
-                LogInfo("Adding RaceControl to list");
-                drivers.Add(new Registration()
+                if (RaceControlReg != null)
                 {
-                    FullName = "Race Control",
-                    Skin = "knutselpacecar",
-                    // Marcel
-                    SteamId64 = "76561199043953770"
-                });
-
+                    LogInfo("");
+                    LogInfo("Adding RaceControl to list");
+                    driversToRegister.Add(RaceControlReg);
+                }
 
                 int count = 0;
                 LogInfo("");
-                LogInfo($"Registering drivers for car: {carKey}");
-                foreach (var reg in drivers)
+                LogInfo($"Registering drivers for car: {carGroup.Key}");
+                foreach (var reg in driversToRegister)
                 {
                     /*
                     [CAR_2]
@@ -254,8 +331,15 @@ namespace ACEntryListGenerator
                     //}
                     if (reg.SteamId64.Length < 14)
                     {
-                        LogError($"Error {reg.FullName}: Wrong SteamId64 (must be 15+ characters): {reg.SteamId64}. Driver not registered!");
-
+                        if (WrongIdFixDictionary.ContainsKey(reg.SteamId64))
+                        {
+                            LogWarning($"Wrong steamId for {reg.FullName}, fix found. replacing {reg.SteamId64} with {WrongIdFixDictionary[reg.SteamId64]}");
+                            reg.SteamId64 = WrongIdFixDictionary[reg.SteamId64];
+                        }
+                        else
+                        {
+                            LogError($"Error {reg.FullName}: Wrong SteamId64 (must be 15+ characters): {reg.SteamId64}. Driver not registered!");
+                        }
                     }
                     else
                     {
@@ -264,7 +348,7 @@ namespace ACEntryListGenerator
                         await writer.WriteLineAsync($"DRIVERNAME={reg.FullName}");
                         await writer.WriteLineAsync($"GUID={reg.SteamId64}");
                         await writer.WriteLineAsync($"TEAM={reg.Team}");
-                        await writer.WriteLineAsync($"MODEL={carKey}");
+                        await writer.WriteLineAsync($"MODEL={reg.Car}");
                         await writer.WriteLineAsync($"#SkinMode={reg.SkinFoundMode}");
                         await writer.WriteLineAsync($"SKIN={reg.Skin}");
                         await writer.WriteLineAsync($"BALLAST=0");
@@ -276,6 +360,20 @@ namespace ACEntryListGenerator
                     }
                 }
             }
+        }
+
+        private static int GetMaxCars()
+        {
+            int max = 30; // max of zolder
+            if (RaceControlReg != null)
+            {
+                max--;
+            }
+            if (BroadcastReg != null)
+            {
+                max--;
+            }
+            return max;
         }
 
         private static List<SkinUi> LoadSkinsData(string carKey)
@@ -311,20 +409,6 @@ namespace ACEntryListGenerator
             return JsonConvert.DeserializeObject<SkinUi>(uiContent);
         }
 
-        private static string MapCarKey(string key)
-        {
-            switch (key)
-            {
-                case "BMW E30 grA":
-                    return "bmw_m3_e30_gra";
-                case "Peugeot 206 Gti":
-                    return "peugeot_206_rps_206_gti_cup";
-                case "Mazda MX5 CUP":
-                    return "ks_mazda_mx5_cup";
-                default:
-                    return key;
-            }
-        }
 
         private static List<Registration> ReadCVS()
         {
@@ -377,42 +461,31 @@ namespace ACEntryListGenerator
                     {
                         jRow.Add(MapHeader(headerRow[i]), reader.GetString(i));
                     }
+                    // don't really care about actual time  or time one here, just need time to know which is last in case of duplicates.
+                    // 2020/05/03 4:29:34 p.m. EET
+                    // Yes, it is a shitty way to parse date, but it works
+                    var dt = DateTime.ParseExact(jRow["added"].Replace(" EET", "").Replace("a.m.", "AM").Replace("p.m.", "PM"), "yyyy/M/d h:mm:ss tt", CultureInfo.InvariantCulture);
+                    jRow["added"] = dt.ToString(CultureInfo.InvariantCulture);
+                    // and yes, this is a shitty way to parse my csv row to object, but it does the job :)
                     var regStr = JsonConvert.SerializeObject(jRow);
                     regs.Add(JsonConvert.DeserializeObject<Registration>(regStr));
                 }
             }
+            // fix/map car property
+            foreach (var reg in regs)
+            {
+                reg.Car = Cars.MapCarKey(reg.Car);
+            }
+
             return regs;
-        }
-
-        public class Registration
-        {
-            public string Email { get; set; }
-            public string FullName { get; set; }
-            public string SteamId64 { get; set; }
-            public string Car { get; set; }
-            public string Skin { get; set; }
-            public string ExtraInfo { get; set; }
-            public bool SkinFound { get; internal set; }
-            public string Team { get; internal set; }
-            public string SkinFoundMode { get; internal set; }
-        }
-
-
-        public class SkinUi
-        {
-            public string Skinname { get; set; }
-            public string Drivername { get; set; }
-            public string Country { get; set; }
-            public string Team { get; set; }
-            public string Number { get; set; }
-            public string Priority { get; set; }
-            public string Directory { get; set; }
         }
 
         private static string MapHeader(string header)
         {
             switch (header)
             {
+                case "Tijdstempel":
+                    return "added";
                 case "Gebruikersnaam":
                     return "email";
                 case "Volledige Naam":
