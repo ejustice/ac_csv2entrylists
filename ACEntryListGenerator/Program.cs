@@ -267,9 +267,9 @@ namespace ACEntryListGenerator
                 }
                 // try to find skin by given skin id
                 bool uesOnlyOnce = skins.Count >= driversToRegister.Count(r => !r.SkinFound);
-                foreach (var reg in driversToRegister.Where(r => !r.SkinFound && !String.IsNullOrEmpty(r.Skin)))
+                foreach (var reg in driversToRegister.Where(r => !r.SkinFound && !String.IsNullOrWhiteSpace(r.Skin)))
                 {
-                    LogInfo($" - - provided skinName: {reg.Skin}");
+                    LogInfo($" - {reg.FullName} - provided skinName: {reg.Skin}");
                     var skinByName = skins.FirstOrDefault(
                         s => s.Directory.Equals(reg.Skin, StringComparison.InvariantCultureIgnoreCase) ||
                         s.Skinname.Equals(reg.Skin, StringComparison.InvariantCultureIgnoreCase)
@@ -356,7 +356,6 @@ namespace ACEntryListGenerator
                         await writer.WriteLineAsync();
                         count++;
                         LogSuccess($"Registered driver: {reg.FullName}, SteamId64: {reg.SteamId64}, skin: {reg.Skin} ({reg.SkinFoundMode})");
-
                     }
                 }
             }
