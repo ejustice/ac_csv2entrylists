@@ -379,7 +379,8 @@ namespace ACEntryListGenerator
                     await writer.WriteLineAsync($"RESTRICTOR=0");
                     await writer.WriteLineAsync();
                     count++;
-                    LogSuccess($"Registered driver: {reg.FullName}, SteamId64: {reg.SteamId64}, skin: {reg.Skin} ({reg.SkinFoundMode})");
+                    // SteamId64: {reg.SteamId64},
+                    LogSuccess($"Registered driver: {reg.FullName}, car: {reg.Car}, skin: {reg.Skin} ({reg.SkinFoundMode})");
                 }
             }
         }
