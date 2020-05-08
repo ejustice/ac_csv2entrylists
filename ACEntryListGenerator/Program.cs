@@ -103,19 +103,6 @@ namespace ACEntryListGenerator
                     WrongIdFixDictionary.Add(parts[0], parts[1]);
                 }
             }
-
-
-            var (_, error) = Init(configuration);
-            if (!String.IsNullOrWhiteSpace(error))
-            {
-                LogError(error);
-            }
-        }
-
-        private static (string, string) Init(IConfigurationRoot configuration)
-        {
-
-            return (null, null);
         }
 
         /*
@@ -144,21 +131,6 @@ namespace ACEntryListGenerator
                     await GenerateEntryList(carGroup, results);
                 }
 
-
-                // scan cars skins
-
-
-                // generate entry_list
-                /*
-                [CAR_2]
-                MODEL=bmw_m3_e30_gra
-                SKIN=1991_BTCC_77_Baird
-                BALLAST=0
-                RESTRICTOR=0
-                DRIVERNAME=Robin Ruijter
-                GUID=76561197998202739
-                */
-
                 LogSuccess("Completed. press key to exit.");
                 Console.ReadKey();
             }
@@ -171,11 +143,12 @@ namespace ACEntryListGenerator
             }
         }
 
+        static int[] Points = new[] { 25, 18, 15, 12, 10, 8, 6, 4, 2, 1 };
         private static void GenerateResultsScoreFile(RaceResults results, string filePath, List<Registration> registrations)
         {
             using (StreamWriter writer = File.CreateText(filePath))
             {
-                writer.WriteLine("Pos,Driver,car,skin,Laps,TotalTime,GapToFirst,BestLap,Contacts");
+                writer.WriteLine("Pos,Driver,car,skin,Laps,TotalTime,GapToFirst,BestLap,Contacts,Points");
                 int pos = 1;
                 int firstLaps = results.Laps.Count(l => l.DriverGuid == results.Result.First().DriverGuid);
                 var firstTime = TimeSpan.FromMilliseconds(results.Result.First().TotalTime);
@@ -191,11 +164,20 @@ namespace ACEntryListGenerator
                     var diffToFirst = (totalTime - firstTime);
                     var contacts = results.Events.Count(e => e.Type == "COLLISION_WITH_CAR" && e.CarId == result.CarId);
                     var lapsGap = firstLaps - laps.Count();
-                    var gapToFirst = lapsGap == 0 ? $"{diffToFirst}" : $"{lapsGap} Lap{(lapsGap > 1 ? "s" : "")}";
-                    writer.WriteLine($"{pos},{registeredDriver?.FullName ?? result.DriverName},{result.CarModel},{registeredDriver?.Skin ?? "unknown"},{laps.Count()},{totalTime:G},+{gapToFirst},{bestLap:G},{contacts}");
+                    var gapToFirst = lapsGap == 0 ? $"{diffToFirst:mm\\:ss\\.fff}" : $"{lapsGap} Lap{(lapsGap > 1 ? "s" : "")}";
+                    var totalTimeString = totalTime == TimeSpan.Zero ? "DNF" : totalTime.ToString(@"mm\:ss\.fff");
+                    var points = GetPoints(pos);
+                    writer.WriteLine($"{pos},{registeredDriver?.FullName ?? result.DriverName},{result.CarModel},{registeredDriver?.Skin ?? "unknown"},{laps.Count()},{totalTimeString},+{gapToFirst},{bestLap:mm\\:ss\\.fff},{contacts},{points}");
                     pos++;
                 }
             }
+        }
+
+        private static int GetPoints(int pos)
+        {
+            if (pos > Points.Length)
+                return 0;
+            return Points[pos - 1];
         }
 
         private static RaceResults ReadResultsFile()
