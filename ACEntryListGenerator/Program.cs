@@ -27,6 +27,10 @@ namespace ACEntryListGenerator
         static readonly Registration BroadcastReg;
         static readonly Registration RaceControlReg;
         static readonly Dictionary<string, string> WrongIdFixDictionary = new Dictionary<string, string>();
+        static readonly bool GridFromResult;
+        static readonly bool InvertedGrid;
+
+        static readonly string ResultsFilePath;
 
         static Program()
         {
@@ -53,6 +57,10 @@ namespace ACEntryListGenerator
                 throw new Exception();
             }
 
+            ResultsFilePath = configuration["ResultsFile"];
+            GridFromResult = Boolean.TryParse(configuration["GridFromResult"] ?? "false", out var gridFromResult) ? gridFromResult : false;
+            InvertedGrid = Boolean.TryParse(configuration["InvertedGrid"] ?? "false", out var invertedGrid) ? invertedGrid : false;
+
             var brodcastId = configuration["BroadcastSteamId"];
             if (String.IsNullOrEmpty(brodcastId))
             {
@@ -63,10 +71,9 @@ namespace ACEntryListGenerator
                 BroadcastReg = new Registration()
                 {
                     Car = Cars.BMW_E30_GRA,
-                    FullName = "Tv Crew",
+                    FullName = "Broadcast",
                     Skin = "knutselpacecar",
-                    SteamId64 = brodcastId,
-                    Team = "Tv Crew",
+                    SteamId64 = brodcastId
                 };
             }
 
@@ -82,7 +89,7 @@ namespace ACEntryListGenerator
                     Car = Cars.BMW_E30_GRA,
                     FullName = "Race Control",
                     Skin = "knutselpacecar",
-                    SteamId64 = raceControlSteamId,
+                    SteamId64 = raceControlSteamId
                 };
             }
 
@@ -111,19 +118,30 @@ namespace ACEntryListGenerator
             return (null, null);
         }
 
-        // Key = "carFolder|skinFolder"
+        /*
+         ACEntryListGenerator.exe: generates entrylist
+         ACEntryListGenerator.exe -result [resultFile]: generates results and score for this race
+         ACEntryListGenerator.exe -revertgrid [resultFile]: generates new REVERSED grid based on results
+        */
         static async Task Main(string[] args)
         {
             try
             {
                 // laod CSV
                 var registrations = ReadCVS();
-
                 var carGroups = registrations.GroupBy(r => r.Car);
+
+                var results = ReadResultsFile();
+
+                if (results != null)
+                {
+                    var resultPath = ResultsFilePath.Substring(0, ResultsFilePath.Length - 5) + ".csv";
+                    GenerateResultsScoreFile(results, resultPath, registrations);
+                }
 
                 foreach (var carGroup in carGroups)
                 {
-                    await GenerateEntryList(carGroup);
+                    await GenerateEntryList(carGroup, results);
                 }
 
 
@@ -153,7 +171,50 @@ namespace ACEntryListGenerator
             }
         }
 
+        private static void GenerateResultsScoreFile(RaceResults results, string filePath, List<Registration> registrations)
+        {
+            using (StreamWriter writer = File.CreateText(filePath))
+            {
+                writer.WriteLine("Pos,Driver,car,skin,Laps,TotalTime,GapToFirst,BestLap,Contacts");
+                int pos = 1;
+                int firstLaps = results.Laps.Count(l => l.DriverGuid == results.Result.First().DriverGuid);
+                var firstTime = TimeSpan.FromMilliseconds(results.Result.First().TotalTime);
+                foreach (var result in results.Result)
+                {
+                    if (string.IsNullOrEmpty(result.DriverGuid))
+                        continue;
 
+                    var registeredDriver = registrations.FirstOrDefault(reg => reg.SteamId64 == result.DriverGuid);
+                    var laps = results.Laps.Where(l => l.DriverGuid == result.DriverGuid);
+                    var totalTime = TimeSpan.FromMilliseconds(result.TotalTime);
+                    var bestLap = TimeSpan.FromMilliseconds(result.BestLap);
+                    var diffToFirst = (totalTime - firstTime);
+                    var contacts = results.Events.Count(e => e.Type == "COLLISION_WITH_CAR" && e.CarId == result.CarId);
+                    var lapsGap = firstLaps - laps.Count();
+                    var gapToFirst = lapsGap == 0 ? $"{diffToFirst}" : $"{lapsGap} Lap{(lapsGap > 1 ? "s" : "")}";
+                    writer.WriteLine($"{pos},{registeredDriver?.FullName ?? result.DriverName},{result.CarModel},{registeredDriver?.Skin ?? "unknown"},{laps.Count()},{totalTime:G},+{gapToFirst},{bestLap:G},{contacts}");
+                    pos++;
+                }
+            }
+        }
+
+        private static RaceResults ReadResultsFile()
+        {
+            if (String.IsNullOrWhiteSpace(ResultsFilePath))
+            {
+                return null;
+            }
+
+            if (!File.Exists(ResultsFilePath))
+            {
+                LogWarning($"Result file not found, skipping: {ResultsFilePath}");
+                return null;
+            }
+
+            var resultStr = File.ReadAllText(ResultsFilePath);
+            var raceResults = JsonConvert.DeserializeObject<RaceResults>(resultStr);
+            return raceResults;
+        }
 
         private static void LogInfo(string text)
         {
@@ -206,7 +267,7 @@ namespace ACEntryListGenerator
             //            serviceCollection.AddTransient<Program>();
         }
 
-        private static async Task GenerateEntryList(IGrouping<string, Registration> carGroup)
+        private static async Task GenerateEntryList(IGrouping<string, Registration> carGroup, RaceResults results)
         {
             if (!Directory.Exists(AssettoCorsaPath))
             {
@@ -223,7 +284,6 @@ namespace ACEntryListGenerator
                 LogWarning($"Too many cars in group: {carGroup.Count()}/28");
             }
 
-            var skins = LoadSkinsData(carGroup.Key);
 
             if (!Directory.Exists(carGroup.Key))
             {
@@ -231,70 +291,48 @@ namespace ACEntryListGenerator
             }
             using (StreamWriter writer = File.CreateText($"{carGroup.Key}\\entry_list.ini"))
             {
-                var driversToRegister = new List<Registration>();
-                foreach (var reg in carGroup)
+                List<Registration> driversToRegister = new List<Registration>();
+
+                if (GridFromResult && results != null)
                 {
-                    // Deduplicating
-                    var duplicates = carGroup.Where(r => r.Email == reg.Email).ToList();
-                    if (duplicates.Count > 1)
+
+                    var sortedResults = results.Result.Where(
+                            i => !(
+                                    string.IsNullOrWhiteSpace(i.DriverGuid)
+                                    || i.DriverGuid == BroadcastReg?.SteamId64
+                                    || i.DriverGuid == RaceControlReg?.SteamId64
+                                    || i.DriverName.Equals("Race Control", StringComparison.InvariantCultureIgnoreCase)
+                                    || i.DriverName.Equals("Broadcast", StringComparison.InvariantCultureIgnoreCase)
+                                    )).ToList();
+                    if (InvertedGrid)
                     {
-                        LogWarning($"Driver with email address {reg.Email} appears multiple times.");
-                        if (reg.Added < duplicates.Max(r => r.Added))
+                        sortedResults.Reverse();
+                    }
+
+                    foreach (var result in sortedResults)
+                    {
+                        var registeredDriver = carGroup.FirstOrDefault(reg => reg.SteamId64 == result.DriverGuid);
+                        if (registeredDriver == null)
                         {
-                            LogWarning("not the latest instance of this driver, skipping.");
-                            continue;
+                            LogWarning($"driver from result not found in registration {result.DriverName}: {result.DriverGuid}");
                         }
                         else
                         {
-                            LogInfo("latest instance of driver, continuing");
+                            driversToRegister.Add(registeredDriver);
                         }
                     }
-                    driversToRegister.Add(reg);
-                }
-
-                // try to find skin by name
-                foreach (var reg in driversToRegister)
-                {
-                    var skinByDriverName = skins.FirstOrDefault(s => s.Drivername.Equals(reg.FullName, StringComparison.InvariantCultureIgnoreCase));
-                    if (skinByDriverName != null)
+                    // Add drivers that were not in result file as last
+                    foreach (var driver in carGroup)
                     {
-                        reg.Skin = skinByDriverName.Directory;
-                        reg.Team = skinByDriverName.Team;
-                        reg.SkinFound = true;
-                        reg.SkinFoundMode = "DriverName";
-                        skins.Remove(skinByDriverName);
-                    }
-                }
-                // try to find skin by given skin id
-                bool uesOnlyOnce = skins.Count >= driversToRegister.Count(r => !r.SkinFound);
-                foreach (var reg in driversToRegister.Where(r => !r.SkinFound && !String.IsNullOrWhiteSpace(r.Skin)))
-                {
-                    LogInfo($" - {reg.FullName} - provided skinName: {reg.Skin}");
-                    var skinByName = skins.FirstOrDefault(
-                        s => s.Directory.Equals(reg.Skin, StringComparison.InvariantCultureIgnoreCase) ||
-                        s.Skinname.Equals(reg.Skin, StringComparison.InvariantCultureIgnoreCase)
-                        );
-                    if (skinByName != null)
-                    {
-                        reg.Skin = skinByName.Directory;
-                        reg.SkinFoundMode = "SkinName";
-                        reg.SkinFound = true;
-                        if (uesOnlyOnce)
+                        if (!driversToRegister.Exists(d => d.SteamId64 == driver.SteamId64))
                         {
-                            skins.Remove(skinByName);
+                            driversToRegister.Add(driver);
                         }
                     }
                 }
-                // randomizeSkin
-                var random = new Random(DateTime.Now.Millisecond);
-                foreach (var reg in driversToRegister.Where(r => !r.SkinFound))
+                else
                 {
-                    // {reg.Email} - 
-                    LogWarning($"{reg.FullName}: No skin found, randomizing.");
-                    var index = random.Next(0, skins.Count - 1);
-                    var skin = skins[index];
-                    reg.Skin = skin.Directory;
-                    reg.SkinFoundMode = "Random";
+                    driversToRegister = carGroup.OrderBy(c => c.PositionOnGrid).ToList();
                 }
 
                 if (BroadcastReg != null)
@@ -329,34 +367,19 @@ namespace ACEntryListGenerator
                     //{
                     //    LogError($"{reg.Email} - {reg.FullName}: Wrong SteamId64: {reg.SteamId64}.");
                     //}
-                    if (reg.SteamId64.Length < 14)
-                    {
-                        if (WrongIdFixDictionary.ContainsKey(reg.SteamId64))
-                        {
-                            LogWarning($"Wrong steamId for {reg.FullName}, fix found. replacing {reg.SteamId64} with {WrongIdFixDictionary[reg.SteamId64]}");
-                            reg.SteamId64 = WrongIdFixDictionary[reg.SteamId64];
-                        }
-                        else
-                        {
-                            LogError($"Error {reg.FullName}: Wrong SteamId64 (must be 15+ characters): {reg.SteamId64}. Driver not registered!");
-                        }
-                    }
-                    else
-                    {
-                        await writer.WriteLineAsync($"[CAR_{count}]");
-                        await writer.WriteLineAsync($"#EMAIL={reg.Email}");
-                        await writer.WriteLineAsync($"DRIVERNAME={reg.FullName}");
-                        await writer.WriteLineAsync($"GUID={reg.SteamId64}");
-                        await writer.WriteLineAsync($"TEAM={reg.Team}");
-                        await writer.WriteLineAsync($"MODEL={reg.Car}");
-                        await writer.WriteLineAsync($"#SkinMode={reg.SkinFoundMode}");
-                        await writer.WriteLineAsync($"SKIN={reg.Skin}");
-                        await writer.WriteLineAsync($"BALLAST=0");
-                        await writer.WriteLineAsync($"RESTRICTOR=0");
-                        await writer.WriteLineAsync();
-                        count++;
-                        LogSuccess($"Registered driver: {reg.FullName}, SteamId64: {reg.SteamId64}, skin: {reg.Skin} ({reg.SkinFoundMode})");
-                    }
+                    await writer.WriteLineAsync($"[CAR_{count}]");
+                    await writer.WriteLineAsync($"#EMAIL={reg.Email}");
+                    await writer.WriteLineAsync($"DRIVERNAME={reg.FullName}");
+                    await writer.WriteLineAsync($"GUID={reg.SteamId64}");
+                    await writer.WriteLineAsync($"TEAM={reg.Team}");
+                    await writer.WriteLineAsync($"MODEL={reg.Car}");
+                    await writer.WriteLineAsync($"#SkinMode={reg.SkinFoundMode}");
+                    await writer.WriteLineAsync($"SKIN={reg.Skin}");
+                    await writer.WriteLineAsync($"BALLAST=0");
+                    await writer.WriteLineAsync($"RESTRICTOR=0");
+                    await writer.WriteLineAsync();
+                    count++;
+                    LogSuccess($"Registered driver: {reg.FullName}, SteamId64: {reg.SteamId64}, skin: {reg.Skin} ({reg.SkinFoundMode})");
                 }
             }
         }
@@ -470,13 +493,108 @@ namespace ACEntryListGenerator
                     regs.Add(JsonConvert.DeserializeObject<Registration>(regStr));
                 }
             }
-            // fix/map car property
+
+            return FixRegistrationList(regs);
+        }
+
+        private static List<Registration> FixRegistrationList(List<Registration> regs)
+        {
+            List<Registration> fixedList = new List<Registration>();
             foreach (var reg in regs)
             {
+                // Deduplicating
+                var duplicates = regs.Where(r => r.Email == reg.Email).ToList();
+                if (duplicates.Count > 1)
+                {
+                    LogWarning($"Driver with email address {reg.Email} appears multiple times.");
+                    if (reg.Added < duplicates.Max(r => r.Added))
+                    {
+                        LogWarning("not the latest instance of this driver, skipping.");
+                        continue;
+                    }
+                    else
+                    {
+                        LogInfo("latest instance of driver, continuing");
+                    }
+                }
+
+                // checkSteamId
                 reg.Car = Cars.MapCarKey(reg.Car);
+                if (reg.SteamId64.Length < 14)
+                {
+                    if (WrongIdFixDictionary.ContainsKey(reg.SteamId64))
+                    {
+                        LogWarning($"Wrong steamId for {reg.FullName}, fix found. replacing {reg.SteamId64} with {WrongIdFixDictionary[reg.SteamId64]}");
+                        reg.SteamId64 = WrongIdFixDictionary[reg.SteamId64];
+                    }
+                    else
+                    {
+                        LogError($"Error {reg.FullName}: Wrong SteamId64 (must be 15+ characters): {reg.SteamId64}. Driver not registered!");
+                        continue;
+                    }
+                }
+                fixedList.Add(reg);
             }
 
-            return regs;
+            FixSkins(fixedList);
+
+            return fixedList;
+        }
+
+        private static void FixSkins(List<Registration> fixedList)
+        {
+            var skinsDic = new Dictionary<string, List<SkinUi>>();
+            foreach (var car in fixedList.Select(r => r.Car).Distinct())
+            {
+                skinsDic.Add(car, LoadSkinsData(car));
+            }
+
+            // try to find skin by name
+            foreach (var reg in fixedList)
+            {
+                var skins = skinsDic[reg.Car];
+                var skinByDriverName = skins.FirstOrDefault(s => s.Drivername.Equals(reg.FullName, StringComparison.InvariantCultureIgnoreCase));
+                if (skinByDriverName != null)
+                {
+                    reg.Skin = skinByDriverName.Directory;
+                    reg.Team = skinByDriverName.Team;
+                    reg.SkinFound = true;
+                    reg.SkinFoundMode = "DriverName";
+                    skins.Remove(skinByDriverName);
+                }
+            }
+            // try to find skin by given skin id
+            foreach (var reg in fixedList.Where(r => !r.SkinFound && !String.IsNullOrWhiteSpace(r.Skin)))
+            {
+                var skins = skinsDic[reg.Car];
+                LogInfo($" - {reg.FullName} - provided skinName: {reg.Skin}");
+                var skinByName = skins.FirstOrDefault(
+                    s => s.Directory.Equals(reg.Skin, StringComparison.InvariantCultureIgnoreCase) ||
+                    s.Skinname.Equals(reg.Skin, StringComparison.InvariantCultureIgnoreCase)
+                    );
+                if (skinByName != null)
+                {
+                    reg.Skin = skinByName.Directory;
+                    reg.SkinFoundMode = "SkinName";
+                    reg.SkinFound = true;
+                    if (skins.Count >= fixedList.Count(r => !r.SkinFound))
+                    {
+                        skins.Remove(skinByName);
+                    }
+                }
+            }
+            // randomizeSkin
+            var random = new Random(DateTime.Now.Millisecond);
+            foreach (var reg in fixedList.Where(r => !r.SkinFound))
+            {
+                var skins = skinsDic[reg.Car];
+                // {reg.Email} - 
+                LogWarning($"{reg.FullName}: No skin found, randomizing.");
+                var index = random.Next(0, skins.Count - 1);
+                var skin = skins[index];
+                reg.Skin = skin.Directory;
+                reg.SkinFoundMode = "Random";
+            }
         }
 
         private static string MapHeader(string header)

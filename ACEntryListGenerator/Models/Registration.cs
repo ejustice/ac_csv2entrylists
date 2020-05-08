@@ -14,5 +14,6 @@ namespace ACEntryListGenerator.Models
         public bool SkinFound { get; internal set; }
         public string Team { get; internal set; }
         public string SkinFoundMode { get; internal set; }
+        public object PositionOnGrid { get; internal set; }
     }
 }
