@@ -464,7 +464,7 @@ namespace ACEntryListGenerator
                     var jRow = new Dictionary<string, string>();
                     for (var i = 0; i < headerRow.Count; i++)
                     {
-                        jRow.Add(MapHeader(headerRow[i]), reader.GetString(i));
+                        jRow.Add(MapHeader(headerRow[i]), reader.GetString(i).Trim());
                     }
                     // don't really care about actual time  or time one here, just need time to know which is last in case of duplicates.
                     // 2020/05/03 4:29:34 p.m. EET
