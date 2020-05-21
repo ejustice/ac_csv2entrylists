@@ -29,8 +29,11 @@ namespace ACEntryListGenerator
         static readonly Dictionary<string, string> WrongIdFixDictionary = new Dictionary<string, string>();
         static readonly bool GridFromResult;
         static readonly bool InvertedGrid;
+        static readonly string CacheFolder;
 
         static readonly string ResultsFilePath;
+        static readonly Dictionary<string, CachedDriver> DriversCache;
+
 
         static Program()
         {
@@ -55,6 +58,17 @@ namespace ACEntryListGenerator
             {
                 LogError($"Game directory not found: {AssettoCorsaPath}");
                 throw new Exception();
+            }
+
+            CacheFolder = configuration["Cache_folder"];
+            if (!Directory.Exists(CacheFolder))
+            {
+                LogInfo($"Cache directory not found: {CacheFolder}, creting it.");
+                Directory.CreateDirectory(CacheFolder);
+            }
+            else
+            {
+                DriversCache = LoadCachedDrivers(CacheFolder);
             }
 
             ResultsFilePath = configuration["ResultsFile"];
@@ -105,6 +119,30 @@ namespace ACEntryListGenerator
             }
         }
 
+        const string DriversCacheFileName = "drivers.json";
+        private static Dictionary<string, CachedDriver> LoadCachedDrivers(string cacheFolder)
+        {
+            var path = Path.Combine(cacheFolder, DriversCacheFileName);
+            if (!File.Exists(path))
+            {
+                return new Dictionary<string, CachedDriver>();
+            }
+            var jsonContent = File.ReadAllText(path);
+            return JsonConvert.DeserializeObject<Dictionary<string, CachedDriver>>(jsonContent);
+        }
+
+        private static void SaveCachedDrivers(Dictionary<string, CachedDriver> driversCache, string cacheFolder)
+        {
+            var path = Path.Combine(cacheFolder, DriversCacheFileName);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+
+            var json = JsonConvert.SerializeObject(driversCache);
+            File.WriteAllText(path, json);
+        }
+
         /*
          ACEntryListGenerator.exe: generates entrylist
          ACEntryListGenerator.exe -result [resultFile]: generates results and score for this race
@@ -116,6 +154,7 @@ namespace ACEntryListGenerator
             {
                 // laod CSV
                 var registrations = ReadCVS();
+
                 var carGroups = registrations.GroupBy(r => r.Car);
 
                 var results = ReadResultsFile();
@@ -361,9 +400,32 @@ namespace ACEntryListGenerator
                     await writer.WriteLineAsync($"RESTRICTOR=0");
                     await writer.WriteLineAsync();
                     count++;
+
+                    // add to cache
+                    UpertDriverCache(reg);
+
                     // SteamId64: {reg.SteamId64},
                     LogSuccess($"Registered driver: {reg.FullName}, car: {reg.Car}, skin: {reg.Skin} ({reg.SkinFoundMode})");
                 }
+            }
+            SaveCachedDrivers(DriversCache, CacheFolder);
+        }
+
+        private static void UpertDriverCache(Registration reg)
+        {
+            CachedDriver cachedDriver;
+            if (!DriversCache.ContainsKey(reg.SteamId64))
+            {
+                DriversCache.Add(reg.SteamId64, new CachedDriver(reg));
+            }
+            cachedDriver = DriversCache[reg.SteamId64];
+            if (cachedDriver.CarSkins.ContainsKey(reg.Car))
+            {
+                cachedDriver.CarSkins[reg.Car] = reg.Skin;
+            }
+            else
+            {
+                cachedDriver.CarSkins.Add(reg.Car, reg.Skin);
             }
         }
 
@@ -542,10 +604,24 @@ namespace ACEntryListGenerator
                     reg.Skin = skinByDriverName.Directory;
                     reg.Team = skinByDriverName.Team;
                     reg.SkinFound = true;
-                    reg.SkinFoundMode = "DriverName";
+                    reg.SkinFoundMode = SkinMode.DriverName;
                     skins.Remove(skinByDriverName);
                 }
             }
+
+            // lookup in cache
+            foreach (var reg in fixedList.Where(r => !r.SkinFound && DriversCache.ContainsKey(r.SteamId64)))
+            {
+                var cachedDriver = DriversCache[reg.SteamId64];
+                var skins = skinsDic[reg.Car];
+                if (cachedDriver.CarSkins.ContainsKey(reg.Car) && skins.Any(s => s.Directory == cachedDriver.CarSkins[reg.Car]))
+                {
+                    reg.Skin = cachedDriver.CarSkins[reg.Car];
+                    reg.SkinFoundMode = SkinMode.FromCache;
+                    reg.SkinFound = true;
+                }
+            }
+
             // try to find skin by given skin id
             foreach (var reg in fixedList.Where(r => !r.SkinFound && !String.IsNullOrWhiteSpace(r.Skin)))
             {
@@ -558,7 +634,7 @@ namespace ACEntryListGenerator
                 if (skinByName != null)
                 {
                     reg.Skin = skinByName.Directory;
-                    reg.SkinFoundMode = "SkinName";
+                    reg.SkinFoundMode = SkinMode.SkinName;
                     reg.SkinFound = true;
                     if (skins.Count >= fixedList.Count(r => !r.SkinFound))
                     {
@@ -566,6 +642,7 @@ namespace ACEntryListGenerator
                     }
                 }
             }
+
             // randomizeSkin
             var random = new Random(DateTime.Now.Millisecond);
             foreach (var reg in fixedList.Where(r => !r.SkinFound))
@@ -576,7 +653,7 @@ namespace ACEntryListGenerator
                 var index = random.Next(0, skins.Count - 1);
                 var skin = skins[index];
                 reg.Skin = skin.Directory;
-                reg.SkinFoundMode = "Random";
+                reg.SkinFoundMode = SkinMode.Random;
             }
         }
 

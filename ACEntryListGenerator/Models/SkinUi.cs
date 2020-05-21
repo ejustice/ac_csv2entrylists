@@ -10,4 +10,17 @@
         public string Priority { get; set; }
         public string Directory { get; set; }
     }
+
+    public static class SkinMode
+    {
+        public static string None => "";
+        public static string DriverName => "DriverName";
+        public static string FromCache => "FromCache";
+        public static string SkinName => "SkinName";
+        public static string Random => "Random";
+
+
+
+
+    }
 }
