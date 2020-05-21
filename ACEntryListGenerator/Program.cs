@@ -60,16 +60,13 @@ namespace ACEntryListGenerator
                 throw new Exception();
             }
 
-            CacheFolder = configuration["Cache_folder"];
+            CacheFolder = Path.Combine(Environment.GetEnvironmentVariable("APPDATA"), "ACEntryListGenerator");
             if (!Directory.Exists(CacheFolder))
             {
                 LogInfo($"Cache directory not found: {CacheFolder}, creting it.");
                 Directory.CreateDirectory(CacheFolder);
             }
-            else
-            {
-                DriversCache = LoadCachedDrivers(CacheFolder);
-            }
+            DriversCache = LoadCachedDrivers(CacheFolder);
 
             ResultsFilePath = configuration["ResultsFile"];
             GridFromResult = Boolean.TryParse(configuration["GridFromResult"] ?? "false", out var gridFromResult) ? gridFromResult : false;
