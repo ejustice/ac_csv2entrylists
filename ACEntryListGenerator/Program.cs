@@ -31,9 +31,13 @@ namespace ACEntryListGenerator
         static readonly bool InvertedGrid;
         static readonly string CacheFolder;
 
+        static readonly bool FillMissingSlotsWithEmptyDrivers;
+        static readonly int MaxSlots;
+
         static readonly string ResultsFilePath;
         static readonly Dictionary<string, CachedDriver> DriversCache;
-
+        static readonly Dictionary<string, List<SkinUi>> AllSkins;
+        static readonly Random Random = new Random(DateTime.Now.Millisecond);
 
         static Program()
         {
@@ -71,6 +75,8 @@ namespace ACEntryListGenerator
             ResultsFilePath = configuration["ResultsFile"];
             GridFromResult = Boolean.TryParse(configuration["GridFromResult"] ?? "false", out var gridFromResult) ? gridFromResult : false;
             InvertedGrid = Boolean.TryParse(configuration["InvertedGrid"] ?? "false", out var invertedGrid) ? invertedGrid : false;
+            FillMissingSlotsWithEmptyDrivers = Boolean.TryParse(configuration["FillMissingSlotsWithEmptyDrivers"] ?? "false", out var fillMissingSlots) ? fillMissingSlots : false;
+            MaxSlots = Int32.TryParse(configuration["MaxSlots"] ?? "0", out var maxSlots) ? maxSlots : 0;
 
             var brodcastId = configuration["BroadcastSteamId"];
             if (String.IsNullOrEmpty(brodcastId))
@@ -114,6 +120,18 @@ namespace ACEntryListGenerator
                     WrongIdFixDictionary.Add(parts[0], parts[1]);
                 }
             }
+
+            AllSkins = LoadSkins();
+        }
+
+        private static Dictionary<string, List<SkinUi>> LoadSkins()
+        {
+            var skinsDic = new Dictionary<string, List<SkinUi>>();
+            foreach (var car in Cars.AllCars)
+            {
+                skinsDic.Add(car, LoadSkinsData(car));
+            }
+            return skinsDic;
         }
 
         const string DriversCacheFileName = "drivers.json";
@@ -397,14 +415,30 @@ namespace ACEntryListGenerator
                     await writer.WriteLineAsync($"RESTRICTOR=0");
                     await writer.WriteLineAsync();
                     count++;
-
                     // add to cache
                     UpertDriverCache(reg);
 
                     // SteamId64: {reg.SteamId64},
                     LogSuccess($"Registered driver: {reg.FullName}, car: {reg.Car}, skin: {reg.Skin} ({reg.SkinFoundMode})");
                 }
+                if (FillMissingSlotsWithEmptyDrivers)
+                { //carGroup
+                    while (count < MaxSlots)
+                    {
+                        var skin = GetRandomSkin(carGroup.Key);
+                        await writer.WriteLineAsync($"[CAR_{count}]");
+                        await writer.WriteLineAsync($"MODEL={carGroup.Key}");
+                        await writer.WriteLineAsync($"#SkinMode={SkinMode.Random}");
+                        await writer.WriteLineAsync($"SKIN={skin}");
+                        await writer.WriteLineAsync($"BALLAST=0");
+                        await writer.WriteLineAsync($"RESTRICTOR=0");
+                        await writer.WriteLineAsync();
+                        count++;
+                        LogSuccess($"Added free slot with skin: {skin}");
+                    }
+                }
             }
+
             SaveCachedDrivers(DriversCache, CacheFolder);
         }
 
@@ -585,16 +619,12 @@ namespace ACEntryListGenerator
 
         private static void FixSkins(List<Registration> fixedList)
         {
-            var skinsDic = new Dictionary<string, List<SkinUi>>();
-            foreach (var car in fixedList.Select(r => r.Car).Distinct())
-            {
-                skinsDic.Add(car, LoadSkinsData(car));
-            }
+
 
             // try to find skin by name
             foreach (var reg in fixedList)
             {
-                var skins = skinsDic[reg.Car];
+                var skins = AllSkins[reg.Car];
                 var skinByDriverName = skins.FirstOrDefault(s => s.Drivername.Equals(reg.FullName, StringComparison.InvariantCultureIgnoreCase));
                 if (skinByDriverName != null)
                 {
@@ -610,7 +640,7 @@ namespace ACEntryListGenerator
             foreach (var reg in fixedList.Where(r => !r.SkinFound && DriversCache.ContainsKey(r.SteamId64)))
             {
                 var cachedDriver = DriversCache[reg.SteamId64];
-                var skins = skinsDic[reg.Car];
+                var skins = AllSkins[reg.Car];
                 if (cachedDriver.CarSkins.ContainsKey(reg.Car) && skins.Any(s => s.Directory == cachedDriver.CarSkins[reg.Car]))
                 {
                     reg.Skin = cachedDriver.CarSkins[reg.Car];
@@ -622,7 +652,7 @@ namespace ACEntryListGenerator
             // try to find skin by given skin id
             foreach (var reg in fixedList.Where(r => !r.SkinFound && !String.IsNullOrWhiteSpace(r.Skin)))
             {
-                var skins = skinsDic[reg.Car];
+                var skins = AllSkins[reg.Car];
                 LogInfo($" - {reg.FullName} - provided skinName: {reg.Skin}");
                 var skinByName = skins.FirstOrDefault(
                     s => s.Directory.Equals(reg.Skin, StringComparison.InvariantCultureIgnoreCase) ||
@@ -641,17 +671,19 @@ namespace ACEntryListGenerator
             }
 
             // randomizeSkin
-            var random = new Random(DateTime.Now.Millisecond);
             foreach (var reg in fixedList.Where(r => !r.SkinFound))
             {
-                var skins = skinsDic[reg.Car];
-                // {reg.Email} - 
                 LogWarning($"{reg.FullName}: No skin found, randomizing.");
-                var index = random.Next(0, skins.Count - 1);
-                var skin = skins[index];
-                reg.Skin = skin.Directory;
+                reg.Skin = GetRandomSkin(reg.Car);
                 reg.SkinFoundMode = SkinMode.Random;
             }
+        }
+
+        private static string GetRandomSkin(string car)
+        {
+            var skins = AllSkins[car];
+            var index = Random.Next(0, skins.Count - 1);
+            return skins[index].Directory;
         }
 
         private static string MapHeader(string header)
