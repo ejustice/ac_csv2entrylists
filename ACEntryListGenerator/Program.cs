@@ -21,6 +21,7 @@ namespace ACEntryListGenerator
         static readonly string CsvPath; // = @"C:\tmp\DNRT-regs\DNRT - KRPE Race 10 Mei Zolder.csv";
         static readonly string AssettoCorsaPath; // = @"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\";
         const string CarsPath = @"content\cars\";
+        const int RevertTopNPos = 10;
 
         public static IConfigurationRoot configuration;
 
@@ -154,7 +155,7 @@ namespace ACEntryListGenerator
                 File.Delete(path);
             }
 
-            var json = JsonConvert.SerializeObject(driversCache);
+            var json = JsonConvert.SerializeObject(driversCache, Formatting.Indented);
             File.WriteAllText(path, json);
         }
 
@@ -342,7 +343,35 @@ namespace ACEntryListGenerator
                                     )).ToList();
                     if (InvertedGrid)
                     {
-                        sortedResults.Reverse();
+                        // revert top 10
+                        if (sortedResults.Count <= RevertTopNPos)
+                        {
+                            sortedResults.Reverse();
+                        }
+                        else
+                        {
+                            //var revertedGrid = new List<Result>();
+                            //for(var i = RevertTopNPos-1; i>=0; i--)
+                            //{
+                            //    revertedGrid.Add(sortedResults[i]);
+                            //}
+                            //for (var i = RevertTopNPos; i < sortedResults.Count; i++)
+                            //{
+                            //    revertedGrid.Add(sortedResults[i]);
+
+                            //}
+                            //if(revertedGrid.Count != sortedResults.Count)
+                            //{
+                            //    LogError($"reverted grid error: {revertedGrid.Count} != {sortedResults.Count}");
+                            //}
+                            //sortedResults = revertedGrid;
+
+                            var revertedTop10 = sortedResults.Take(RevertTopNPos).ToList();
+                            revertedTop10.Reverse();
+                            var notInvertedRest = sortedResults.TakeLast(sortedResults.Count - RevertTopNPos);
+                            sortedResults = revertedTop10;
+                            sortedResults.AddRange(notInvertedRest);
+                        }
                     }
 
                     foreach (var result in sortedResults)
@@ -452,11 +481,27 @@ namespace ACEntryListGenerator
             cachedDriver = DriversCache[reg.SteamId64];
             if (cachedDriver.CarSkins.ContainsKey(reg.Car))
             {
-                cachedDriver.CarSkins[reg.Car] = reg.Skin;
+                if (cachedDriver.CarSkins[reg.Car] != reg.Skin)
+                {
+                    cachedDriver.CarSkins[reg.Car] = reg.Skin;
+                    cachedDriver.Updated = DateTime.Now;
+                }
             }
             else
             {
                 cachedDriver.CarSkins.Add(reg.Car, reg.Skin);
+                cachedDriver.Updated = DateTime.Now;
+            }
+            if (cachedDriver.FullName != reg.FullName)
+            {
+                cachedDriver.FullName = reg.FullName;
+                cachedDriver.Updated = DateTime.Now;
+
+            }
+            if (string.IsNullOrWhiteSpace(cachedDriver.ExtraInfo) && !string.IsNullOrWhiteSpace(reg.ExtraInfo))
+            {
+                cachedDriver.ExtraInfo = reg.ExtraInfo;
+                cachedDriver.Updated = DateTime.Now;
             }
         }
 
