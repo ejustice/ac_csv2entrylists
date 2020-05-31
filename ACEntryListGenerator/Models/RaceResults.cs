@@ -6,6 +6,9 @@ namespace ACEntryListGenerator.Models
 {
     public partial class RaceResults
     {
+        public DateTime RaceDateTime { get; set; }
+        public string CarKey { get; set; }
+
         public string TrackName { get; set; }
         public string TrackConfig { get; set; }
         public string Type { get; set; }

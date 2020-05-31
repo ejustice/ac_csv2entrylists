@@ -12,6 +12,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace ACEntryListGenerator
@@ -36,6 +37,7 @@ namespace ACEntryListGenerator
         static readonly int MaxSlots;
 
         static readonly string ResultsFilePath;
+        static readonly string ResultsFilesDirectory;
         static readonly Dictionary<string, CachedDriver> DriversCache;
         static readonly Dictionary<string, List<SkinUi>> AllSkins;
         static readonly Random Random = new Random(DateTime.Now.Millisecond);
@@ -74,6 +76,7 @@ namespace ACEntryListGenerator
             DriversCache = LoadCachedDrivers(CacheFolder);
 
             ResultsFilePath = configuration["ResultsFile"];
+            ResultsFilesDirectory = configuration["ResultsFilesDirectory"];
             GridFromResult = Boolean.TryParse(configuration["GridFromResult"] ?? "false", out var gridFromResult) ? gridFromResult : false;
             InvertedGrid = Boolean.TryParse(configuration["InvertedGrid"] ?? "false", out var invertedGrid) ? invertedGrid : false;
             FillMissingSlotsWithEmptyDrivers = Boolean.TryParse(configuration["FillMissingSlotsWithEmptyDrivers"] ?? "false", out var fillMissingSlots) ? fillMissingSlots : false;
@@ -173,7 +176,7 @@ namespace ACEntryListGenerator
 
                 var carGroups = registrations.GroupBy(r => r.Car);
 
-                var results = ReadResultsFile();
+                var results = ReadResultsFile(ResultsFilePath);
 
                 if (results != null)
                 {
@@ -235,21 +238,45 @@ namespace ACEntryListGenerator
             return Points[pos - 1];
         }
 
-        private static RaceResults ReadResultsFile()
+        static Regex ResultFilesFilter = new Regex("\\d+_\\d+_\\d+_\\d+_\\d+_RACE\\.json", RegexOptions.Compiled);
+        private static Dictionary<string, IReadOnlyList<RaceResults>> ReadResultsFiles()
         {
-            if (String.IsNullOrWhiteSpace(ResultsFilePath))
+            Dictionary<string, IReadOnlyList<RaceResults>> result = new Dictionary<string, IReadOnlyList<RaceResults>>();
+            // 2020_2_9_19_21_RACE.json
+            if (!Directory.Exists(ResultsFilesDirectory))
+            {
+                LogWarning($"result directory not found, skipping. {ResultsFilesDirectory}");
+                return result;
+            }
+            foreach (var filename in Directory.EnumerateFiles(ResultsFilesDirectory).Where(f => ResultFilesFilter.IsMatch(f)))
+            {
+                var raceResult = ReadResultsFile(filename);
+                if (result.ContainsKey(raceResult.CarKey))
+                    result.add()
+            }
+            var resultsDir = Directory.(ResultsFilesDirectory);
+            throw new NotImplementedException();
+        }
+
+        private static RaceResults ReadResultsFile(string resultFile)
+        {
+            if (String.IsNullOrWhiteSpace(resultFile))
             {
                 return null;
             }
 
-            if (!File.Exists(ResultsFilePath))
+            if (!File.Exists(resultFile))
             {
-                LogWarning($"Result file not found, skipping: {ResultsFilePath}");
+                LogWarning($"Result file not found, skipping: {resultFile}");
                 return null;
             }
 
-            var resultStr = File.ReadAllText(ResultsFilePath);
+            var resultStr = File.ReadAllText(resultFile);
             var raceResults = JsonConvert.DeserializeObject<RaceResults>(resultStr);
+            string filenameDatePart = resultFile.Substring(0, resultFile.LastIndexOf("_RACE"));
+            DateTime raceDateTime = DateTime.ParseExact(filenameDatePart, "yyyy_mm_dd_hh_MM", null);
+            raceResults.RaceDateTime = raceDateTime;
+            raceResults.CarKey = raceResults.Cars.FirstOrDefault()?.Model;
             return raceResults;
         }
 
